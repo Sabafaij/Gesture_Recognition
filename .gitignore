@@ -1,0 +1,12 @@
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.venv/
+.venv311/
+venv/
+env/
+models/*.pkl
+models/*.task
+data/raw/*.csv
+data/processed/*.csv
