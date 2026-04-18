@@ -1,5 +1,6 @@
 from __future__ import annotations
 import argparse
+import signal
 import time
 import cv2
 import joblib
@@ -39,46 +40,66 @@ def main() -> None:
 
     last_spoken = ""
     last_spoken_ts = 0.0
-    with create_hand_landmarker(HAND_LANDMARKER_TASK, num_hands=1) as hand_landmarker:
-        while True:
-            ok, frame = cap.read()
-            if not ok:
-                break
+    shutdown_requested = False
 
-            frame = cv2.flip(frame, 1)
-            result = detect_hands(hand_landmarker, frame)
-            draw_landmarks(frame, result)
+    def handle_sigint(_signum, _frame) -> None:
+        nonlocal shutdown_requested
+        shutdown_requested = True
 
-            pred_label = "No Gesture"
-            confidence = 0.0
-            hand = extract_first_hand(result)
-            if hand is not None:
-                probs = model.predict_proba(hand.feature_vector.reshape(1, -1))[0]
-                pred_idx = int(np.argmax(probs))
-                confidence = float(probs[pred_idx])
-                if confidence >= args.threshold:
-                    pred_label = str(encoder.inverse_transform([pred_idx])[0])
-                    now = time.time()
-                    if pred_label != last_spoken or (now - last_spoken_ts) >= args.speak_interval:
-                        tts.say(pred_label)
-                        tts.runAndWait()
-                        last_spoken = pred_label
-                        last_spoken_ts = now
+    previous_sigint_handler = signal.getsignal(signal.SIGINT)
+    signal.signal(signal.SIGINT, handle_sigint)
 
-            put_status_text(
-                frame,
-                [
-                    f"Prediction: {pred_label}",
-                    f"Confidence: {confidence:.2f}",
-                    "Press 'q' to exit",
-                ],
-            )
-            cv2.imshow("Real-Time Gesture Recognition", frame)
-            if cv2.waitKey(1) & 0xFF == ord("q"):
-                break
+    try:
+        with create_hand_landmarker(HAND_LANDMARKER_TASK, num_hands=1) as hand_landmarker:
+            while not shutdown_requested:
+                ok, frame = cap.read()
+                if not ok:
+                    break
 
-    cap.release()
-    cv2.destroyAllWindows()
+                frame = cv2.flip(frame, 1)
+                result = detect_hands(hand_landmarker, frame)
+                draw_landmarks(frame, result)
+
+                pred_label = "No Gesture"
+                confidence = 0.0
+                hand = extract_first_hand(result)
+                if hand is not None:
+                    probs = model.predict_proba(hand.feature_vector.reshape(1, -1))[0]
+                    pred_idx = int(np.argmax(probs))
+                    confidence = float(probs[pred_idx])
+                    if confidence >= args.threshold:
+                        pred_label = str(encoder.inverse_transform([pred_idx])[0])
+                        now = time.time()
+                        if pred_label != last_spoken or (now - last_spoken_ts) >= args.speak_interval:
+                            tts.say(pred_label)
+                            tts.runAndWait()
+                            last_spoken = pred_label
+                            last_spoken_ts = now
+
+                put_status_text(
+                    frame,
+                    [
+                        f"Prediction: {pred_label}",
+                        f"Confidence: {confidence:.2f}",
+                        "Press 'q' to exit",
+                    ],
+                )
+                cv2.imshow("Real-Time Gesture Recognition", frame)
+                if cv2.waitKey(1) & 0xFF == ord("q"):
+                    break
+    except KeyboardInterrupt:
+        # Fallback path for environments that still raise KeyboardInterrupt.
+        pass
+    finally:
+        # Avoid Ctrl+C interrupts while COM/TTS objects are cleaning up.
+        signal.signal(signal.SIGINT, signal.SIG_IGN)
+        try:
+            tts.stop()
+        except Exception:
+            pass
+        cap.release()
+        cv2.destroyAllWindows()
+        signal.signal(signal.SIGINT, previous_sigint_handler)
 
 
 if __name__ == "__main__":
